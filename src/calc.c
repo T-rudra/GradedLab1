@@ -1,6 +1,9 @@
 // Rudra Tushir 231ADB234
-// [https://github.com/gradedlab1](https://github.com/)<your_repo>
+// https://github.com/T-rudra/GradedLab1
 // Compile with: gcc -O2 -Wall -Wextra -std=c17 -o bin/calc src/calc.c -lm
+// General Instructions: all txt files should be in the same folder as calc.c
+// Output files will be written to "Tasks" folder created alongside the executable
+// Code is compiled in the bin folder
 
 
 #include <stdio.h>
@@ -99,7 +102,7 @@ static void advance(size_t n) {
     g_i += n;
 }
 
-/* --------- Tokenizer --------- */
+/* --------- Tokenizer fixed errors from reddit forums and Ai*/
 
 /* Produce next token and advance g_i appropriately */
 static Token get_token_internal(void) {
