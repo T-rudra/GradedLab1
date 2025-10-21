@@ -108,18 +108,27 @@ static Token get_token_internal(void) {
     t.start = g_i;
     t.len = 0;
 
-    int at_line_start = (g_i == 0) || (g_i > 0 && g_buf[g_i - 1] == '\n');
-
     /* Skip whitespace (newlines count toward positions) */
     while (g_i < g_len && isspace((unsigned char)g_buf[g_i])) {
         g_i++;
     }
 
-    /* If line-start and '#', skip whole line (comments) */
-    if (g_i < g_len && at_line_start && g_buf[g_i] == '#') {
-        while (g_i < g_len && g_buf[g_i] != '\n') g_i++;
-        if (g_i < g_len && g_buf[g_i] == '\n') g_i++;
-        return get_token_internal();
+    /* If '#' is the first non-whitespace on the line, skip whole line (comments) */
+    if (g_i < g_len && g_buf[g_i] == '#') {
+        /* check if there is any non-whitespace after the previous newline up to here */
+        size_t k = g_i;
+        int found_nonws = 0;
+        while (k > 0) {
+            char prev = g_buf[k - 1];
+            if (prev == '\n') break;
+            if (!isspace((unsigned char)prev)) { found_nonws = 1; break; }
+            k--;
+        }
+        if (!found_nonws) {
+            while (g_i < g_len && g_buf[g_i] != '\n') g_i++;
+            if (g_i < g_len && g_buf[g_i] == '\n') g_i++;
+            return get_token_internal();
+        }
     }
 
     t.start = g_i;
@@ -476,35 +485,79 @@ static int write_output_file(const char *outdir, const char *inbase, const char 
 }
 
 static char *evaluate_buffer_and_format_result(void) {
-    g_have_error = 0; g_error_pos = 0; g_i = 0;
+    /* Build a multi-line result: one line per expression in the input buffer */
+    size_t cap = 512;
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    out[0] = '\0';
+    size_t out_len = 0;
+
+    g_i = 0;
+    g_have_error = 0;
+    g_error_pos = 0;
+
+    /* Prime first token */
     next_token();
-    Value v = parse_expr();
-    if (g_have_error) {
-        size_t pos1 = g_error_pos + 1;
-        char *s = (char *)malloc(64); if (!s) return NULL;
-        snprintf(s, 64, "ERROR:%zu", pos1); return s;
-    }
-    if (g_tok.type != TOK_EOF) {
-        error_at(g_tok.start);
-        size_t pos1 = g_error_pos + 1;
-        char *s = (char *)malloc(64); if (!s) return NULL;
-        snprintf(s, 64, "ERROR:%zu", pos1); return s;
-    }
-    int print_as_int = 0; long long ival = 0;
-    if (v.is_int) { print_as_int = 1; ival = v.i; }
-    else {
-        double rounded = (double) my_llround(v.d);
-        if (fabs(v.d - rounded) < EPS_INT && rounded <= (double)LLONG_MAX && rounded >= (double)LLONG_MIN) {
-            print_as_int = 1; ival = (long long)rounded;
+
+    for (;;) {
+        /* Skip any leading whitespace/comments between expressions */
+        while (g_tok.type == TOK_EOF) break;
+        /* If at EOF -> done */
+        if (g_tok.type == TOK_EOF) break;
+
+        /* Reset error state for this expression */
+        g_have_error = 0;
+        g_error_pos = 0;
+
+        /* Parse one expression starting at current g_tok */
+        Value v = parse_expr();
+
+        /* Format one-line result */
+        char linebuf[256];
+        if (g_have_error) {
+            size_t pos1 = g_error_pos + 1;
+            snprintf(linebuf, sizeof(linebuf), "ERROR:%zu", pos1);
+
+            /* Recover: skip to end of current line in the buffer and prime next token */
+            while (g_i < g_len && g_buf[g_i] != '\n') g_i++;
+            if (g_i < g_len && g_buf[g_i] == '\n') g_i++;
+            g_tok = get_token_internal();
+        } else {
+            int print_as_int = 0;
+            long long ival = 0;
+            if (v.is_int) { print_as_int = 1; ival = v.i; }
+            else {
+                double rounded = (double) my_llround(v.d);
+                if (fabs(v.d - rounded) < EPS_INT && rounded <= (double)LLONG_MAX && rounded >= (double)LLONG_MIN) {
+                    print_as_int = 1; ival = (long long)rounded;
+                }
+            }
+            if (print_as_int) snprintf(linebuf, sizeof(linebuf), "%lld", (long long)ival);
+            else snprintf(linebuf, sizeof(linebuf), "%.15g", v.d);
+            /* g_tok already points to the next token after the parsed expression */
         }
+
+        /* Append line (with newline) to output buffer */
+        size_t need = strlen(linebuf) + 1; /* +1 for newline */
+        if (out_len + need + 1 > cap) {
+            while (out_len + need + 1 > cap) cap *= 2;
+            char *nx = (char *)realloc(out, cap);
+            if (!nx) { free(out); return NULL; }
+            out = nx;
+        }
+        memcpy(out + out_len, linebuf, strlen(linebuf));
+        out_len += strlen(linebuf);
+        out[out_len++] = '\n';
+        out[out_len] = '\0';
+
+        /* If token is EOF, stop; otherwise continue parsing next expression (g_tok is already set) */
+        if (g_tok.type == TOK_EOF) break;
     }
-    char *out;
-    if (print_as_int) {
-        out = (char *)malloc(64); if (!out) return NULL;
-        snprintf(out, 64, "%lld", (long long)ival);
-    } else {
-        out = (char *)malloc(128); if (!out) return NULL;
-        snprintf(out, 128, "%.15g", v.d);
+
+    /* If nothing produced, return empty line */
+    if (out_len == 0) {
+        free(out);
+        out = my_strdup("");
     }
     return out;
 }
